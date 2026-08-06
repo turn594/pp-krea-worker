@@ -1,19 +1,12 @@
-# Personal Paw — RunPod Krea worker
+# Personal Paw — Krea worker (step ladder)
 
-Recipe for RunPod **Serverless** so collar art is generated with:
+**Rule:** one change → fail-fast smoke (≤45s) → only then next step.
 
-- Krea Turbo (models on your RunPod network volume)
-- Wrap nodes (seamless tile on the collar band)
+| Step | What’s in the image | Pass criteria |
+|------|---------------------|---------------|
+| **1** | Stock `worker-comfyui:5.8.6-base` only | Mini EmptyImage COMPLETED (warm preferred) |
+| **2** | + soft UST custom nodes | Mini OK + UST node exists |
+| **3** | + Comfy upgrade for `krea2` CLIP | Product CLIP loads / no type error |
+| **4** | + volume models path | Full Krea+UST product PNG |
 
-**Art still runs only on RunPod.** This repo is just the install recipe.
-
-## Deploy (console)
-
-1. RunPod → **Serverless** → **New Endpoint** → **Start from GitHub Repo**
-2. Pick this repo
-3. Dockerfile path: `Dockerfile` · context: `/`
-4. Attach network volume **xf0nyvfim9** (region **US-IL-1**)
-5. FlashBoot **ON** · workers min **0** · max **2** · idle **180s**
-6. GPU: **24GB+** (A6000 / L40S / similar)
-
-After the build finishes, copy the endpoint ID and use it for smoke / Cloudflare secrets.
+Deploy: RunPod Serverless → GitHub repo `turn594/pp-krea-worker` · volume `xf0nyvfim9` only after step 4.

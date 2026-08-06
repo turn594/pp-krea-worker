@@ -1,16 +1,19 @@
+# STEP 1 only — prove a GitHub-built image from official base can run.
+# No custom nodes, no yaml overwrite, no Comfy upgrade.
+# After this smokes green, next commit adds ONE layer.
+
 FROM runpod/worker-comfyui:5.8.6-base
 
-USER root
+# Replace default test workflow so RunPod builder smoke doesn't need models.
+RUN printf '%s\n' \
+  '{' \
+  '  "input": {' \
+  '    "workflow": {' \
+  '      "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1, "color": 0}},' \
+  '      "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "rp_test"}}' \
+  '    }' \
+  '  }' \
+  '}' > /test_input.json \
+  && (cp -f /test_input.json /comfyui/test_input.json 2>/dev/null || true)
 
-# Network-volume endpoints need runpod>=1.10.1 (1.9.1-1.10.0 job-tracking bug).
-# Per RunPod Assistant / docs serverless troubleshooting.
-RUN pip install --no-cache-dir "runpod>=1.10.1" \
-  || uv pip install --system "runpod>=1.10.1" \
-  || true
-RUN python -c "import runpod; print('runpod', getattr(runpod, '__version__', '?'))"
-
-COPY custom_nodes/universal_seamless/ /comfyui/custom_nodes/universal_seamless/
-COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
-
-RUN test -f /comfyui/custom_nodes/universal_seamless/__init__.py
-# Do not override CMD/entrypoint — keep stock worker-comfyui /start.sh
+# Stock CMD/entrypoint only.
