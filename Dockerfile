@@ -1,22 +1,16 @@
-# B-infra / mini cold ladder image.
-# Layer 1 only: stock worker + UST nodes + volume paths + SDK fix.
-# NO full Comfy master upgrade / torch 908MB wheel here (that failed RunPod buildx).
-# After mini on/off/cold is GREEN, next commit adds krea2-era Comfy+torch as layer 2.
+# Ladder B — ONE layer past last green (14b93ee stock EmptyImage).
+# Layer: + UST custom_nodes only.
+# Fixed: grep the file that actually defines MakeCircularVAEDiT (not soft __init__).
+# No torch upgrade, no Comfy master, no yaml, no pip — those are later steps.
 
 FROM runpod/worker-comfyui:5.8.6-base
 
 USER root
 
-# Network-volume job tracking fix
-RUN pip install -U 'runpod>=1.10.1' || true
-
-# Product wrap nodes (soft-fail import)
+# UST DiT wrap nodes only
 COPY custom_nodes/universal_seamless/ /comfyui/custom_nodes/universal_seamless/
 
-# Volume model paths for serverless mount /runpod-volume
-COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
-
-# Builder / mini smoke — no multi-GB models
+# Builder mini smoke (same as last green 14b93ee)
 RUN printf '%s\n' \
   '{' \
   '  "input": {' \
@@ -28,8 +22,10 @@ RUN printf '%s\n' \
   '}' > /test_input.json \
   && (cp -f /test_input.json /comfyui/test_input.json 2>/dev/null || true)
 
+# Prove UST files landed (grep the implementation module, not soft-import __init__)
 RUN test -f /comfyui/custom_nodes/universal_seamless/__init__.py \
-  && grep -q MakeCircularVAEDiT /comfyui/custom_nodes/universal_seamless/__init__.py \
+  && test -f /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py \
+  && grep -q MakeCircularVAEDiT /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py \
   && echo "ust_nodes_ok"
 
-# Stock entrypoint only
+# Stock CMD/entrypoint only.
