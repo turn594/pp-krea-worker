@@ -1,16 +1,18 @@
-# Ladder B — ONE layer past last green (14b93ee stock EmptyImage).
-# Layer: + UST custom_nodes only.
-# Fixed: grep the file that actually defines MakeCircularVAEDiT (not soft __init__).
-# No torch upgrade, no Comfy master, no yaml, no pip — those are later steps.
+# Layer 2 past green UST-only gate (ced020b).
+# THIS LAYER ONLY: + extra_model_paths.yaml for /runpod-volume models.
+# Still no torch upgrade, no Comfy master, no pip.
 
 FROM runpod/worker-comfyui:5.8.6-base
 
 USER root
 
-# UST DiT wrap nodes only
+# UST DiT wrap nodes (layer 1 — already gated)
 COPY custom_nodes/universal_seamless/ /comfyui/custom_nodes/universal_seamless/
 
-# Builder mini smoke (same as last green 14b93ee)
+# Layer 2: volume model path map only
+COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
+
+# Builder mini smoke
 RUN printf '%s\n' \
   '{' \
   '  "input": {' \
@@ -22,10 +24,11 @@ RUN printf '%s\n' \
   '}' > /test_input.json \
   && (cp -f /test_input.json /comfyui/test_input.json 2>/dev/null || true)
 
-# Prove UST files landed (grep the implementation module, not soft-import __init__)
 RUN test -f /comfyui/custom_nodes/universal_seamless/__init__.py \
   && test -f /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py \
   && grep -q MakeCircularVAEDiT /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py \
-  && echo "ust_nodes_ok"
+  && test -f /comfyui/extra_model_paths.yaml \
+  && grep -q diffusion_models /comfyui/extra_model_paths.yaml \
+  && echo "layer2_paths_ok"
 
 # Stock CMD/entrypoint only.
