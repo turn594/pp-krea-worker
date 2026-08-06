@@ -32,7 +32,8 @@ RUN set -eux; \
     (uv pip install -r "$SRC/requirements.txt" || pip install -r "$SRC/requirements.txt" || true); \
   fi; \
   cp -f /tmp/emp.yaml /comfyui/extra_model_paths.yaml; \
-  python -c "import comfy.text_encoders.krea2; print('krea2_ok')"; \
+  test -f /comfyui/comfy/text_encoders/krea2.py; \
+  PYTHONPATH=/comfyui python -c "import comfy.text_encoders.krea2; print('krea2_ok')"; \
   rm -rf /tmp/comfy.tgz /tmp/ComfyUI-master /tmp/emp.yaml
 
 # Mini smoke (no multi-GB models)
@@ -49,7 +50,8 @@ RUN printf '%s\n' \
 
 RUN test -f /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py \
   && test -f /comfyui/extra_model_paths.yaml \
-  && python -c "import comfy.text_encoders.krea2" \
+  && test -f /comfyui/comfy/text_encoders/krea2.py \
+  && PYTHONPATH=/comfyui python -c "import comfy.text_encoders.krea2" \
   && echo "layer3_krea2_ok"
 
 # Stock entrypoint only.
