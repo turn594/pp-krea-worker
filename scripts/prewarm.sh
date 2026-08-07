@@ -77,12 +77,24 @@ python -u /prewarm_prompt.py || {
 }
 
 date -Is > /tmp/prewarm_done
-echo "[prewarm] done $(cat /tmp/prewarm_done)"
+echo "[prewarm] done $(cat /tmp/prewarm_done) — keep Comfy PID $COMFY_PID (models in VRAM)"
 
-# Stop temp Comfy; official start.sh will launch fresh handler+comfy with hot page cache
-kill "$COMFY_PID" 2>/dev/null || true
-wait "$COMFY_PID" 2>/dev/null || true
-sleep 1
+# Do NOT kill Comfy: killing drops VRAM and first product reloads >30s.
+# Start serverless handler only if present; else fall back to start.sh (degraded).
+export COMFYUI_ADDRESS="127.0.0.1:${COMFY_PORT}"
+export COMFY_HOST="127.0.0.1"
+export COMFY_PORT
 
-echo "[prewarm] exec official /start.sh"
+for h in /handler.py /rp_handler.py /comfyui/handler.py /workspace/handler.py; do
+  if [[ -f "$h" ]]; then
+    echo "[prewarm] exec handler $h with existing Comfy"
+    exec python -u "$h"
+  fi
+done
+
+echo "[prewarm] no standalone handler — start.sh (may restart Comfy)"
+# Prefer start.sh without restarting comfy if it checks port
+if ss -lnt | grep -q ":${COMFY_PORT}"; then
+  echo "[prewarm] comfy already listening; try start.sh anyway"
+fi
 exec /start.sh
