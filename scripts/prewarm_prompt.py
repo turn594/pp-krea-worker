@@ -103,16 +103,17 @@ def main():
     pid = res.get("prompt_id")
     print("[prewarm_prompt] prompt_id", pid)
     t0 = time.time()
-    while time.time() - t0 < 180:
+    # Keep under outer shell timeout (90s); fail fast so /handler.py can poll.
+    while time.time() - t0 < 75:
         try:
             hist = get(f"/history/{pid}")
             if pid in hist:
-                print("[prewarm_prompt] completed", hist[pid].get("status"))
+                print("[prewarm_prompt] completed", hist[pid].get("status"), "elapsed", round(time.time() - t0, 1))
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print("[prewarm_prompt] history wait", e)
         time.sleep(1)
-    raise SystemExit("prewarm timeout")
+    raise SystemExit("prewarm timeout after 75s")
 
 
 if __name__ == "__main__":

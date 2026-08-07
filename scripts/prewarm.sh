@@ -94,10 +94,14 @@ fi
 echo "[prewarm] VRAM before warmup:"
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
 
-echo "[prewarm] running product-path warmup workflow"
-python -u /prewarm_prompt.py || {
-  echo "[prewarm] prompt failed — still keep Comfy and start handler (degraded warm)"
-}
+echo "[prewarm] running product-path warmup workflow (cap 90s so handler can poll)"
+# If warmup hangs on volume I/O, jobs sit IN_QUEUE forever while worker looks "running".
+# Cap prewarm so poller starts; first product may be slower but assign works.
+if timeout 90s python -u /prewarm_prompt.py; then
+  echo "[prewarm] warmup OK"
+else
+  echo "[prewarm] warmup failed/timeout — keep Comfy, start handler (degraded; FlashBoot still forms after first real job)"
+fi
 
 echo "[prewarm] VRAM after warmup:"
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
