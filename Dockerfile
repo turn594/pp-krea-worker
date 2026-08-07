@@ -9,18 +9,20 @@ USER root
 
 COPY custom_nodes/pp_krea2/ /comfyui/custom_nodes/pp_krea2/
 COPY scripts/pp_flash_start.sh /pp_flash_start.sh
+COPY scripts/prewarm.sh /prewarm.sh
+COPY scripts/prewarm_prompt.py /prewarm_prompt.py
 COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
 
-# Network-volume + serverless job tracking: runpod 1.9.1–1.10.0 can leave
-# jobs IN_QUEUE while workers show ready. Pin fixed SDK. Do not block cold start.
+# Network-volume + serverless: pin runpod>=1.10.1 (IN_QUEUE/ready bug range).
+# RunPod Ask AI: prewarm before exec /start.sh so "ready" means models exercised.
 RUN set -eux; \
   (uv pip install --system 'runpod>=1.10.1' || pip install -U 'runpod>=1.10.1'); \
   python -c "import importlib.metadata as m; print('runpod', m.version('runpod'))"; \
-  chmod +x /pp_flash_start.sh; \
+  chmod +x /pp_flash_start.sh /prewarm.sh; \
   test -f /comfyui/custom_nodes/pp_krea2/__init__.py; \
   test -f /comfyui/custom_nodes/pp_krea2/krea2_dit/model.py; \
   grep -q PPKrea2UNETLoader /comfyui/custom_nodes/pp_krea2/__init__.py; \
   echo pp_krea2_unet_node_ok
 
-# Fast entry: volume paths + immediate /start.sh (no multi-GB cp before ready)
-CMD ["/pp_flash_start.sh"]
+# Prewarm then official /start.sh (handler not assigned until prewarm finishes)
+CMD ["/prewarm.sh"]

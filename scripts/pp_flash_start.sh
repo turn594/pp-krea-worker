@@ -71,5 +71,8 @@ YAML
   echo "[pp-flash] bg hardlink pass done"
 ) >/tmp/pp-flash-stage.log 2>&1 &
 
-echo "[pp-flash] exec stock /start.sh immediately (no multi-GB stage wait)"
+# RunPod Ask AI (2026-08-07): do not read weights from network volume during request
+# hot path. Prefer local hardlinks. Full cp only if hardlink fails AND file small enough
+# would blow SLA — so we only hardlink; volume remains fallback via yaml above.
+echo "[pp-flash] exec stock /start.sh immediately (handler ready before model load)"
 exec /start.sh
