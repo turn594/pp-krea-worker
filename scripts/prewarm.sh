@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# RunPod Ask AI pattern (2026-08-07): do NOT start handler until prewarm done.
-# Then exec official /start.sh so ready means models already exercised.
+# RunPod Ask AI Action 2 (true cold ≤30s):
+# 1) Start ComfyUI once (same pattern as official start.sh)
+# 2) Prewarm product path (load UNet+TE+VAE into VRAM)
+# 3) Start ONLY /handler.py poller — NEVER re-exec /start.sh (that restarts Comfy and drops VRAM)
 set -euo pipefail
 
 echo "[prewarm] boot $(date -Is)"
@@ -43,58 +45,76 @@ pp_local_hot:
   loras: models/loras/
 YAML
 
-# Start Comfy only for prewarm (handler not running yet)
+# Match official worker-comfyui start.sh env
 export COMFY_PORT="${COMFY_PORT:-8188}"
-cd /comfyui
-python main.py --listen 127.0.0.1 --port "$COMFY_PORT" --disable-auto-launch >/tmp/prewarm-comfy.log 2>&1 &
-COMFY_PID=$!
-echo "[prewarm] comfy pid $COMFY_PID"
+export COMFYUI_ADDRESS="127.0.0.1:${COMFY_PORT}"
+export COMFY_HOST="127.0.0.1"
+COMFY_PID_FILE="/tmp/comfyui.pid"
+: "${COMFY_LOG_LEVEL:=INFO}"
 
-# Wait for Comfy HTTP (cap 90s — this is boot, not customer gen)
+# libtcmalloc if available (official start.sh)
+if TCMALLOC="$(ldconfig -p 2>/dev/null | grep -Po 'libtcmalloc.so.\d' | head -n 1 || true)"; then
+  if [[ -n "${TCMALLOC:-}" ]]; then
+    export LD_PRELOAD="${TCMALLOC}"
+  fi
+fi
+
+# Optional offline manager mode
+comfy-manager-set-mode offline 2>/dev/null || true
+
+echo "[prewarm] starting ComfyUI once (keep alive for handler)"
+cd /comfyui
+python -u main.py --disable-auto-launch --disable-metadata --listen 127.0.0.1 --port "$COMFY_PORT" --verbose "${COMFY_LOG_LEVEL}" --log-stdout \
+  >/tmp/prewarm-comfy.log 2>&1 &
+COMFY_PID=$!
+echo "$COMFY_PID" > "$COMFY_PID_FILE"
+echo "[prewarm] comfy pid $COMFY_PID (file $COMFY_PID_FILE)"
+
+# Wait for Comfy HTTP (boot budget, not customer gen)
 ok=0
-for i in $(seq 1 90); do
+for i in $(seq 1 120); do
   if curl -sf "http://127.0.0.1:${COMFY_PORT}/system_stats" >/dev/null 2>&1 \
     || curl -sf "http://127.0.0.1:${COMFY_PORT}/" >/dev/null 2>&1; then
     ok=1
     break
   fi
+  if ! kill -0 "$COMFY_PID" 2>/dev/null; then
+    echo "[prewarm] comfy died during boot"
+    tail -n 100 /tmp/prewarm-comfy.log || true
+    exit 1
+  fi
   sleep 1
 done
 if [[ "$ok" != "1" ]]; then
-  echo "[prewarm] comfy not up — see /tmp/prewarm-comfy.log"
-  tail -n 80 /tmp/prewarm-comfy.log || true
-  kill "$COMFY_PID" 2>/dev/null || true
-  echo "[prewarm] continuing to /start.sh without prewarm (degraded)"
-  exec /start.sh
+  echo "[prewarm] comfy not up in 120s — see /tmp/prewarm-comfy.log"
+  tail -n 100 /tmp/prewarm-comfy.log || true
+  exit 1
 fi
 
-echo "[prewarm] running tiny product-path workflow"
+echo "[prewarm] VRAM before warmup:"
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
+
+echo "[prewarm] running product-path warmup workflow"
 python -u /prewarm_prompt.py || {
-  echo "[prewarm] prompt failed — continue to start.sh"
-  kill "$COMFY_PID" 2>/dev/null || true
-  wait "$COMFY_PID" 2>/dev/null || true
-  exec /start.sh
+  echo "[prewarm] prompt failed — still keep Comfy and start handler (degraded warm)"
 }
 
+echo "[prewarm] VRAM after warmup:"
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
+
 date -Is > /tmp/prewarm_done
-echo "[prewarm] done $(cat /tmp/prewarm_done) — keep Comfy PID $COMFY_PID (models in VRAM)"
+echo "[prewarm] done $(cat /tmp/prewarm_done) — keep Comfy PID $COMFY_PID"
 
-# Do NOT kill Comfy: killing drops VRAM and first product reloads >30s.
-# Start serverless handler only if present; else fall back to start.sh (degraded).
-export COMFYUI_ADDRESS="127.0.0.1:${COMFY_PORT}"
-export COMFY_HOST="127.0.0.1"
-export COMFY_PORT
-
-for h in /handler.py /rp_handler.py /comfyui/handler.py /workspace/handler.py; do
-  if [[ -f "$h" ]]; then
-    echo "[prewarm] exec handler $h with existing Comfy"
-    exec python -u "$h"
-  fi
-done
-
-echo "[prewarm] no standalone handler — start.sh (may restart Comfy)"
-# Prefer start.sh without restarting comfy if it checks port
-if ss -lnt | grep -q ":${COMFY_PORT}"; then
-  echo "[prewarm] comfy already listening; try start.sh anyway"
+# Decisive rule: start poller ONLY. Never exec /start.sh (it restarts Comfy → cold reload).
+if [[ ! -f /handler.py ]]; then
+  echo "[prewarm] FATAL: /handler.py missing — cannot start poller without restarting Comfy"
+  ls -la / | head -n 50 || true
+  find / -name 'handler.py' -o -name 'rp_handler.py' 2>/dev/null | head -n 20 || true
+  exit 1
 fi
-exec /start.sh
+
+echo "[prewarm] VRAM before handler poller:"
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
+
+echo "[prewarm] exec python -u /handler.py (Comfy stays up, models in VRAM)"
+exec python -u /handler.py
