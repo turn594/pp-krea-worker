@@ -7,6 +7,8 @@ import urllib.request
 PORT = 8188
 BASE = f"http://127.0.0.1:{PORT}"
 
+# Match customer product path (PPKrea2 + UST seamless) so first job does not re-wrap models.
+# Tiny spatial size + 1 step — forces weight load + UST paths into VRAM before ready.
 WORKFLOW = {
     "1": {
         "class_type": "PPKrea2UNETLoader",
@@ -26,9 +28,17 @@ WORKFLOW = {
         "class_type": "VAELoader",
         "inputs": {"vae_name": "qwen_image_vae.safetensors"},
     },
+    "3b": {
+        "class_type": "MakeCircularVAEDiT",
+        "inputs": {"vae": ["3", 0], "tiling": "x_only", "copy_vae": "Make a copy"},
+    },
+    "4": {
+        "class_type": "SeamlessTileModelDiT",
+        "inputs": {"model": ["1", 0], "tiling": "x_only", "seed": 1},
+    },
     "6": {
         "class_type": "CLIPTextEncode",
-        "inputs": {"clip": ["2", 0], "text": "prewarm"},
+        "inputs": {"clip": ["2", 0], "text": "prewarm seamless collar"},
     },
     "7a": {
         "class_type": "ConditioningZeroOut",
@@ -41,7 +51,7 @@ WORKFLOW = {
     "9": {
         "class_type": "KSampler",
         "inputs": {
-            "model": ["1", 0],
+            "model": ["4", 0],
             "positive": ["6", 0],
             "negative": ["7a", 0],
             "latent_image": ["8", 0],
@@ -55,7 +65,7 @@ WORKFLOW = {
     },
     "10": {
         "class_type": "VAEDecode",
-        "inputs": {"samples": ["9", 0], "vae": ["3", 0]},
+        "inputs": {"samples": ["9", 0], "vae": ["3b", 0]},
     },
     "11": {
         "class_type": "SaveImage",
