@@ -1,0 +1,41 @@
+name: make-ghcr-public-v2
+on: workflow_dispatch
+permissions:
+  packages: write
+  contents: read
+jobs:
+  pub:
+    runs-on: [self-hosted, pp-bake]
+    steps:
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -x
+          # Correct endpoints (no trailing /visibility with PATCH body)
+          echo "=== GET package ==="
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user/packages/container/pp-krea-worker | head -c 400
+          echo
+          echo "=== PATCH package visibility field ==="
+          curl -sS -w "\nHTTP:%{http_code}\n" -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/user/packages/container/pp-krea-worker \
+            -d '{"visibility":"public"}'
+          echo "=== POST visibility (alt) ==="
+          curl -sS -w "\nHTTP:%{http_code}\n" -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/user/packages/container/pp-krea-worker/visibility \
+            -d '{"visibility":"public"}' || true
+          echo "=== PUT visibility (alt2) ==="
+          curl -sS -w "\nHTTP:%{http_code}\n" -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/user/packages/container/pp-krea-worker/visibility \
+            -d '{"visibility":"public"}' || true
+          echo DONE_PUBLIC
