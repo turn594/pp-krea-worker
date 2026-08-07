@@ -122,27 +122,22 @@ class PPKrea2CLIPLoader:
         except Exception:
             emb = None
 
-        # Ensure CLIPType.KREA2 exists
-        if not hasattr(sd.CLIPType, "KREA2"):
-            members = {m.name: m.value for m in sd.CLIPType}
-            members["KREA2"] = max(members.values()) + 1
-            sd.CLIPType = type(sd.CLIPType)("CLIPType", members)
-            print("[pp_krea2] added CLIPType.KREA2", members["KREA2"])
+        # Prefer stock load_clip when core already has CLIPType.KREA2
+        # (do NOT rebuild Enum with type() — that raises EnumType.__new__ missing classdict)
+        if hasattr(sd.CLIPType, "KREA2"):
+            try:
+                clip = sd.load_clip(
+                    ckpt_paths=[clip_path],
+                    embedding_directory=emb,
+                    clip_type=sd.CLIPType.KREA2,
+                    model_options=model_options,
+                )
+                print("[pp_krea2] load_clip OK")
+                return (clip,)
+            except Exception as e:
+                print("[pp_krea2] load_clip failed, trying direct TE:", e)
 
-        # Prefer native load if core understands KREA2 fully
-        try:
-            clip = sd.load_clip(
-                ckpt_paths=[clip_path],
-                embedding_directory=emb,
-                clip_type=sd.CLIPType.KREA2,
-                model_options=model_options,
-            )
-            print("[pp_krea2] load_clip OK")
-            return (clip,)
-        except Exception as e:
-            print("[pp_krea2] load_clip failed, trying direct TE:", e)
-
-        # Direct TE construction
+        # Direct TE construction (works without core KREA2 enum)
         from comfy.sd import CLIP
 
         state, metadata = comfy.utils.load_torch_file(
@@ -167,29 +162,37 @@ class PPKrea2CLIPLoader:
             except Exception as e:
                 print("[pp_krea2] llama_detect", e)
 
-        te = krea2.te(**te_kwargs) if te_kwargs else krea2.te()
-        # SDXLClipModel-like objects often use load_sd
-        if hasattr(te, "load_sd"):
-            te.load_sd(state)
-        elif hasattr(te, "load_state_dict"):
-            te.load_state_dict(state, strict=False)
-        else:
-            raise RuntimeError("TE has no load_sd/load_state_dict")
+        te_cls = krea2.te(**te_kwargs) if te_kwargs else krea2.te()
 
         class _Tgt:
             pass
 
         tgt = _Tgt()
-        tgt.clip = te
+        # CLIP expects target.clip to be a class/callable, not an instance
+        tgt.clip = te_cls
         tgt.tokenizer = krea2.Krea2Tokenizer
-        # embedding_directory must be list or None, never [None]
+        tgt.params = {}
         try:
-            clip_obj = CLIP(tgt, embedding_directory=emb, model_options=model_options)
-        except TypeError:
+            clip_obj = CLIP(
+                tgt,
+                embedding_directory=emb,
+                model_options=model_options,
+            )
+        except TypeError as e1:
+            print("[pp_krea2] CLIP ctor try1", e1)
             try:
                 clip_obj = CLIP(tgt, embedding_directory=emb)
-            except TypeError:
-                clip_obj = CLIP(tgt)
+            except TypeError as e2:
+                print("[pp_krea2] CLIP ctor try2", e2)
+                # last resort: build TE instance + load weights manually
+                te = te_cls()
+                if hasattr(te, "load_sd"):
+                    te.load_sd(state)
+                elif hasattr(te, "load_state_dict"):
+                    te.load_state_dict(state, strict=False)
+                raise RuntimeError(
+                    "CLIP constructor incompatible; te weights loaded on orphan TE"
+                ) from e2
         print("[pp_krea2] direct TE CLIP OK")
         return (clip_obj,)
 
