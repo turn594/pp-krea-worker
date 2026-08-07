@@ -95,12 +95,32 @@ echo "[prewarm] VRAM before warmup:"
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "nvidia-smi n/a"
 
 echo "[prewarm] running product-path warmup workflow (cap 90s so handler can poll)"
-# If warmup hangs on volume I/O, jobs sit IN_QUEUE forever while worker looks "running".
-# Cap prewarm so poller starts; first product may be slower but assign works.
-if timeout 90s python -u /prewarm_prompt.py; then
-  echo "[prewarm] warmup OK"
-else
-  echo "[prewarm] warmup failed/timeout — keep Comfy, start handler (degraded; FlashBoot still forms after first real job)"
+# Do NOT use coreutils `timeout` (may be missing → set -e aborts before /handler.py).
+# Background the prewarm and kill it if it exceeds PREWARM_CAP; always continue to handler.
+PREWARM_CAP="${PREWARM_CAP_SEC:-90}"
+python -u /prewarm_prompt.py >/tmp/prewarm_prompt.log 2>&1 &
+PW_PID=$!
+pw_ok=0
+for i in $(seq 1 "$PREWARM_CAP"); do
+  if ! kill -0 "$PW_PID" 2>/dev/null; then
+    if wait "$PW_PID"; then
+      pw_ok=1
+      echo "[prewarm] warmup OK in ${i}s"
+    else
+      echo "[prewarm] warmup exited non-zero — see /tmp/prewarm_prompt.log"
+      tail -n 40 /tmp/prewarm_prompt.log || true
+    fi
+    break
+  fi
+  sleep 1
+done
+if kill -0 "$PW_PID" 2>/dev/null; then
+  echo "[prewarm] warmup still running after ${PREWARM_CAP}s — kill and start handler (degraded)"
+  kill "$PW_PID" 2>/dev/null || true
+  wait "$PW_PID" 2>/dev/null || true
+  tail -n 40 /tmp/prewarm_prompt.log || true
+elif [[ "$pw_ok" != "1" ]]; then
+  echo "[prewarm] warmup did not complete cleanly — start handler anyway"
 fi
 
 echo "[prewarm] VRAM after warmup:"
