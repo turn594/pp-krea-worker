@@ -168,33 +168,54 @@ class PPKrea2CLIPLoader:
             pass
 
         tgt = _Tgt()
-        # CLIP expects target.clip to be a class/callable, not an instance
+        # CLIP expects target.clip to be a class (callable), tokenizer class, params dict
         tgt.clip = te_cls
         tgt.tokenizer = krea2.Krea2Tokenizer
         tgt.params = {}
+
+        # Critical: pass state_dict so TE weights actually load.
+        # Without this, encode hits "'Linear' object has no attribute 'weight'".
+        params_n = 0
         try:
-            clip_obj = CLIP(
-                tgt,
+            params_n = comfy.utils.calculate_parameters(state)
+        except Exception:
+            try:
+                params_n = sum(int(v.numel()) for v in state.values() if hasattr(v, "numel"))
+            except Exception:
+                params_n = 0
+
+        def _build(kwargs):
+            return CLIP(tgt, **kwargs)
+
+        attempts = [
+            dict(
                 embedding_directory=emb,
                 model_options=model_options,
-            )
-        except TypeError as e1:
-            print("[pp_krea2] CLIP ctor try1", e1)
+                state_dict=[state],
+                parameters=params_n,
+            ),
+            dict(
+                embedding_directory=emb,
+                model_options=model_options,
+                state_dict=state,
+                parameters=params_n,
+            ),
+            dict(embedding_directory=emb, state_dict=[state]),
+            dict(embedding_directory=emb, state_dict=state),
+        ]
+        last_err = None
+        for kw in attempts:
             try:
-                clip_obj = CLIP(tgt, embedding_directory=emb)
-            except TypeError as e2:
-                print("[pp_krea2] CLIP ctor try2", e2)
-                # last resort: build TE instance + load weights manually
-                te = te_cls()
-                if hasattr(te, "load_sd"):
-                    te.load_sd(state)
-                elif hasattr(te, "load_state_dict"):
-                    te.load_state_dict(state, strict=False)
-                raise RuntimeError(
-                    "CLIP constructor incompatible; te weights loaded on orphan TE"
-                ) from e2
-        print("[pp_krea2] direct TE CLIP OK")
-        return (clip_obj,)
+                clip_obj = _build(kw)
+                print("[pp_krea2] direct TE CLIP OK", list(kw.keys()))
+                return (clip_obj,)
+            except TypeError as e:
+                last_err = e
+                print("[pp_krea2] CLIP ctor TypeError", e, list(kw.keys()))
+            except Exception as e:
+                last_err = e
+                print("[pp_krea2] CLIP ctor fail", type(e).__name__, e)
+        raise RuntimeError(f"PPKrea2CLIPLoader: CLIP construct failed: {last_err}")
 
 
 NODE_CLASS_MAPPINGS = {
