@@ -218,15 +218,230 @@ class PPKrea2CLIPLoader:
         raise RuntimeError(f"PPKrea2CLIPLoader: CLIP construct failed: {last_err}")
 
 
+def _ensure_krea2_unet_runtime():
+    """Runtime-only registration so boot is never broken by core file edits.
+
+    Patches detect_unet_config + registers Krea2 in model_base/supported_models
+    and installs vendored SingleStreamDiT as comfy.ldm.krea2.model.
+    """
+    import importlib
+    import importlib.util
+    import sys
+    import types
+
+    import torch
+    import comfy.model_base as model_base
+    import comfy.model_detection as model_detection
+    import comfy.supported_models as supported_models
+    import comfy.supported_models_base as supported_models_base
+    import comfy.latent_formats as latent_formats
+
+    if getattr(model_detection, "_pp_krea2_unet", False):
+        print("[pp_krea2] unet runtime already patched")
+        return
+
+    # --- install vendored DiT as comfy.ldm.krea2.model ---
+    dit_dir = os.path.join(os.path.dirname(__file__), "krea2_dit")
+    model_py = os.path.join(dit_dir, "model.py")
+    if not os.path.isfile(model_py):
+        raise FileNotFoundError("missing vendored krea2_dit/model.py")
+
+    # package parents
+    if "comfy.ldm.krea2" not in sys.modules:
+        pkg = types.ModuleType("comfy.ldm.krea2")
+        pkg.__path__ = [dit_dir]
+        sys.modules["comfy.ldm.krea2"] = pkg
+    if "comfy.ldm.krea2.model" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("comfy.ldm.krea2.model", model_py)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["comfy.ldm.krea2.model"] = mod
+        spec.loader.exec_module(mod)
+        print("[pp_krea2] loaded vendored SingleStreamDiT")
+
+    # --- model_base.Krea2 ---
+    if not hasattr(model_base, "Krea2"):
+        import comfy.conds
+
+        class Krea2(model_base.BaseModel):
+            def __init__(self, model_config, model_type=model_base.ModelType.FLUX, device=None):
+                super().__init__(
+                    model_config,
+                    model_type,
+                    device=device,
+                    unet_model=sys.modules["comfy.ldm.krea2.model"].SingleStreamDiT,
+                )
+                self.memory_usage_factor_conds = ("ref_latents",)
+
+            def extra_conds(self, **kwargs):
+                out = super().extra_conds(**kwargs)
+                cross_attn = kwargs.get("cross_attn", None)
+                if cross_attn is not None:
+                    out["c_crossattn"] = comfy.conds.CONDRegular(cross_attn)
+                ref_latents = kwargs.get("reference_latents", None)
+                if ref_latents is not None:
+                    latents = [self.process_latent_in(lat) for lat in ref_latents]
+                    out["ref_latents"] = comfy.conds.CONDList(latents)
+                attention_mask = kwargs.get("attention_mask", None)
+                if attention_mask is not None:
+                    out["attention_mask"] = comfy.conds.CONDRegular(attention_mask)
+                return out
+
+        model_base.Krea2 = Krea2
+        print("[pp_krea2] registered model_base.Krea2")
+
+    # --- supported_models.Krea2 ---
+    if not hasattr(supported_models, "Krea2"):
+        try:
+            lf = latent_formats.Wan21
+        except Exception:
+            try:
+                lf = latent_formats.Flux
+            except Exception:
+                lf = latent_formats.SD15
+
+        class Krea2SM(supported_models_base.BASE):
+            unet_config = {"image_model": "krea2"}
+            sampling_settings = {"multiplier": 1.0, "shift": 1.15}
+            memory_usage_factor = 2.2
+            latent_format = lf
+            supported_inference_dtypes = [torch.bfloat16, torch.float16, torch.float32]
+            vae_key_prefix = ["vae."]
+            text_encoder_key_prefix = ["text_encoders."]
+
+            def get_model(self, state_dict, prefix="", device=None):
+                return model_base.Krea2(self, device=device)
+
+            def clip_target(self, state_dict={}):
+                _ensure_krea2_module()
+                import comfy.text_encoders.krea2 as krea2
+
+                return supported_models_base.ClipTarget(krea2.Krea2Tokenizer, krea2.te())
+
+        supported_models.Krea2 = Krea2SM
+        models = getattr(supported_models, "models", None)
+        if isinstance(models, list) and Krea2SM not in models:
+            models.insert(0, Krea2SM)
+            print("[pp_krea2] inserted Krea2 into supported_models.models")
+        print("[pp_krea2] registered supported_models.Krea2")
+
+    # --- patch detect_unet_config ---
+    _orig_detect = model_detection.detect_unet_config
+
+    def _detect_unet_config(state_dict, key_prefix, metadata=None):
+        keys = state_dict.keys() if hasattr(state_dict, "keys") else state_dict
+        probe = "{}txtfusion.projector.weight".format(key_prefix)
+        if probe in keys or any(str(k).endswith("txtfusion.projector.weight") for k in keys):
+            # minimal config — matches() only needs image_model == krea2
+            print("[pp_krea2] detect_unet_config -> krea2")
+            return {"image_model": "krea2"}
+        # some calls use keyword-only metadata on older/newer signatures
+        try:
+            return _orig_detect(state_dict, key_prefix, metadata=metadata)
+        except TypeError:
+            return _orig_detect(state_dict, key_prefix)
+
+    model_detection.detect_unet_config = _detect_unet_config
+    model_detection._pp_krea2_unet = True
+    print("[pp_krea2] unet runtime patch ready")
+
+
+class PPKrea2UNETLoader:
+    """Load Krea2 Turbo UNET when stock UNETLoader cannot detect model type."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import folder_paths
+
+        names = []
+        for folder in ("diffusion_models", "unet"):
+            try:
+                names.extend(folder_paths.get_filename_list(folder) or [])
+            except Exception:
+                pass
+        # de-dupe preserve order
+        seen = set()
+        uniq = []
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                uniq.append(n)
+        if not uniq:
+            uniq = ["krea2_turbo_fp8_scaled.safetensors"]
+        return {
+            "required": {
+                "unet_name": (uniq,),
+                "weight_dtype": (["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load_unet"
+    CATEGORY = "model/loaders"
+    DESCRIPTION = "Krea2 Turbo UNET loader (Personal Paw)"
+
+    def load_unet(self, unet_name, weight_dtype="default"):
+        import torch
+        import folder_paths
+        import comfy.sd as sd
+
+        print("[pp_krea2] UNET load start", unet_name, weight_dtype)
+        _ensure_krea2_unet_runtime()
+
+        model_options = {}
+        if weight_dtype == "fp8_e4m3fn":
+            model_options["dtype"] = torch.float8_e4m3fn
+        elif weight_dtype == "fp8_e4m3fn_fast":
+            model_options["dtype"] = torch.float8_e4m3fn
+            model_options["fp8_optimizations"] = True
+        elif weight_dtype == "fp8_e5m2":
+            model_options["dtype"] = torch.float8_e5m2
+
+        unet_path = None
+        for folder in ("diffusion_models", "unet"):
+            try:
+                if hasattr(folder_paths, "get_full_path_or_raise"):
+                    try:
+                        unet_path = folder_paths.get_full_path_or_raise(folder, unet_name)
+                    except Exception:
+                        unet_path = folder_paths.get_full_path(folder, unet_name)
+                else:
+                    unet_path = folder_paths.get_full_path(folder, unet_name)
+            except Exception:
+                unet_path = None
+            if unet_path:
+                break
+        if not unet_path:
+            for p in (
+                f"/runpod-volume/models/diffusion_models/{unet_name}",
+                f"/runpod-volume/models/unet/{unet_name}",
+                f"/comfyui/models/diffusion_models/{unet_name}",
+            ):
+                if os.path.isfile(p):
+                    unet_path = p
+                    break
+        if not unet_path:
+            raise FileNotFoundError(f"PPKrea2UNETLoader: missing {unet_name}")
+
+        print("[pp_krea2] UNET path", unet_path)
+        model = sd.load_diffusion_model(unet_path, model_options=model_options)
+        if model is None:
+            raise RuntimeError("load_diffusion_model returned None for Krea2 weights")
+        print("[pp_krea2] UNET load OK")
+        return (model,)
+
+
 NODE_CLASS_MAPPINGS = {
     "PPKrea2CLIPLoader": PPKrea2CLIPLoader,
-    # Alias so API workflows can use same name as stock if desired
     "CLIPLoaderKrea2": PPKrea2CLIPLoader,
+    "PPKrea2UNETLoader": PPKrea2UNETLoader,
+    "UNETLoaderKrea2": PPKrea2UNETLoader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PPKrea2CLIPLoader": "CLIP Loader (Krea2)",
     "CLIPLoaderKrea2": "CLIP Loader (Krea2 alias)",
+    "PPKrea2UNETLoader": "UNET Loader (Krea2)",
+    "UNETLoaderKrea2": "UNET Loader (Krea2 alias)",
 }
 
-print("[pp_krea2] registered PPKrea2CLIPLoader")
+print("[pp_krea2] registered CLIP+UNET Krea2 loaders")
