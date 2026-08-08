@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fast cold start: NEVER block on multi-GB copy before the handler is up.
-# Volume paths via extra_model_paths (source of truth). Hardlink-only optional
-# local aliases (no cp). Background hardlink attempt must not delay /start.sh.
-# Customer bar ~20s — a full cp of turbo weights alone blows the bar.
+# OPTIONAL entry (not default). Verified path is still official /start.sh.
+# This only: non-blocking hardlinks for hot weights, then exec stock /start.sh
+# (GPU preflight + Comfy + handler). Does NOT reimplement worker lifecycle.
+# Never multi-GB cp on the critical path.
 set -euo pipefail
 
 VOL="${RUNPOD_VOLUME_PATH:-/runpod-volume}/models"
@@ -74,5 +74,5 @@ YAML
 # RunPod Ask AI (2026-08-07): do not read weights from network volume during request
 # hot path. Prefer local hardlinks. Full cp only if hardlink fails AND file small enough
 # would blow SLA — so we only hardlink; volume remains fallback via yaml above.
-echo "[pp-flash] exec stock /start.sh immediately (handler ready before model load)"
+echo "[pp-flash] exec official /start.sh (verified Comfy + handler dispatch)"
 exec /start.sh

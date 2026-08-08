@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# RunPod Ask AI Action 2 (true cold ≤30s):
-# 1) Start ComfyUI once (same pattern as official start.sh)
+# LEGACY / COLD-PATH EXPERIMENT ONLY — not default CMD.
+# Verified assign path is official /start.sh (see VERIFIED_BASE.md).
+# This reimplements Comfy boot + handler and can desync ready vs job pull.
+# Use only after EmptyImage assign works on stock /start.sh.
+#
+# 1) Start ComfyUI once
 # 2) Prewarm product path (load UNet+TE+VAE into VRAM)
-# 3) Start ONLY /handler.py poller — NEVER re-exec /start.sh (that restarts Comfy and drops VRAM)
+# 3) Start ONLY /handler.py — never re-exec /start.sh (restarts Comfy → drops VRAM)
 set -euo pipefail
+echo "[prewarm] WARNING: non-default entry; prefer /start.sh for assign (A0)"
 
 echo "[prewarm] boot $(date -Is)"
 date -Is > /tmp/boot_id
