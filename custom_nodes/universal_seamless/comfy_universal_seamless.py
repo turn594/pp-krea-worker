@@ -189,10 +189,29 @@ class MakeCircularVAEDiT:
         if copy_vae == "Modify in place":
             vae_copy = vae
         else:
-            vae_copy = copy.deepcopy(vae)
+            try:
+                vae_copy = copy.deepcopy(vae)
+            except Exception as e:
+                print(f"[ust] deepcopy vae failed ({e}); modify in place")
+                vae_copy = vae
 
         tile_x, tile_y = _axes_for(tiling)
-        make_circular(vae_copy.first_stage_model, tile_x, tile_y)
+        # Comfy VAE object shapes differ by version / model family
+        model = getattr(vae_copy, "first_stage_model", None)
+        if model is None:
+            model = getattr(vae_copy, "model", None)
+        if model is None and hasattr(vae_copy, "patcher"):
+            try:
+                model = vae_copy.patcher.model
+            except Exception:
+                model = None
+        if model is None:
+            print(
+                "[ust] MakeCircularVAEDiT: no nn module on VAE "
+                f"(type={type(vae_copy).__name__}); skip circular patch"
+            )
+            return (vae_copy,)
+        make_circular(model, tile_x, tile_y)
         print(f"[ust] MakeCircularVAEDiT tiling={tiling}")
         return (vae_copy,)
 

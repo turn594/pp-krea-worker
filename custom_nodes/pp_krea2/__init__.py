@@ -19,30 +19,62 @@ def _ensure_krea2_module():
     te_dir = os.path.dirname(getattr(te_pkg, "__file__", "") or "") or None
     src = os.path.join(os.path.dirname(__file__), "krea2_te.py")
     if not te_dir or not os.path.isdir(te_dir):
-        # try common locations
+        # try common locations (RunPod image, Modal /root/ComfyUI, cwd)
         for cand in (
             "/comfyui/comfy/text_encoders",
+            "/root/ComfyUI/comfy/text_encoders",
             os.path.join(os.getcwd(), "comfy", "text_encoders"),
+            os.path.join(os.getcwd(), "ComfyUI", "comfy", "text_encoders"),
         ):
             if os.path.isdir(cand):
                 te_dir = cand
                 break
     if not te_dir:
+        # last resort: import comfy package file location
+        try:
+            import comfy
+
+            base = os.path.dirname(getattr(comfy, "__file__", "") or "")
+            cand = os.path.join(base, "text_encoders")
+            if os.path.isdir(cand):
+                te_dir = cand
+        except Exception:
+            pass
+    if not te_dir:
         raise RuntimeError("cannot locate comfy/text_encoders directory")
 
-    dst = os.path.join(te_dir, "krea2.py")
-    if os.path.isfile(src):
-        try:
-            shutil.copy2(src, dst)
-            print("[pp_krea2] installed", dst)
-        except Exception as e:
-            print("[pp_krea2] copy", e)
+    node_dir = os.path.dirname(__file__)
+    # Install krea2 TE + deps that older ComfyUI trees lack.
+    # Order: leaf deps first, then qwen3vl, then krea2 (imports qwen3vl).
+    copies = [
+        ("llama.py", "llama.py"),
+        ("qwen_image.py", "qwen_image.py"),
+        ("hunyuan_video.py", "hunyuan_video.py"),
+        ("qwen3vl.py", "qwen3vl.py"),
+        ("krea2_te.py", "krea2.py"),
+    ]
+    for src_name, dst_name in copies:
+        s = os.path.join(node_dir, src_name)
+        d = os.path.join(te_dir, dst_name)
+        if os.path.isfile(s):
+            try:
+                shutil.copy2(s, d)
+                print("[pp_krea2] installed", d)
+            except Exception as e:
+                print("[pp_krea2] copy", src_name, e)
 
     importlib.invalidate_caches()
     # Force reimport
     import sys
 
-    sys.modules.pop("comfy.text_encoders.krea2", None)
+    for mod in (
+        "comfy.text_encoders.krea2",
+        "comfy.text_encoders.qwen3vl",
+        "comfy.text_encoders.llama",
+        "comfy.text_encoders.qwen_image",
+        "comfy.text_encoders.hunyuan_video",
+    ):
+        sys.modules.pop(mod, None)
     import comfy.text_encoders.krea2 as krea2  # noqa: F401
 
     print("[pp_krea2] module OK", getattr(krea2, "__file__", "?"))
