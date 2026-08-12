@@ -35,7 +35,7 @@ RUN set -eux; \
   test -f /handler.py; \
   test -f /comfyui/custom_nodes/pp_krea2/__init__.py; \
   test -f /comfyui/custom_nodes/universal_seamless/__init__.py; \
-  grep -q MakeCircularVAEDiT /comfyui/custom_nodes/universal_seamless/__init__.py; \
+  grep -q MakeCircularVAEDiT /comfyui/custom_nodes/universal_seamless/comfy_universal_seamless.py; \
   (uv pip install --system 'runpod>=1.10.1' || pip install -U 'runpod>=1.10.1'); \
   python -c "import importlib.metadata as m; v=m.version('runpod'); print('runpod', v); assert tuple(int(x) for x in v.split('.')[:3]) >= (1, 10, 1), v"
 
