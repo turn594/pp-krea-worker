@@ -11,27 +11,26 @@ COPY custom_nodes/pp_krea2/ /comfyui/custom_nodes/pp_krea2/
 COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
 
 # Bake TE stack into stock Comfy 5.8.6 (missing qwen3vl / krea2 / VL helpers).
-# Prefer vendored pp_krea2 copies; fill gaps from ComfyUI master (surgical, not full overlay).
+# Do not import comfy at build time (package lives under /comfyui, not site-packages).
 RUN set -eux; \
   TE=/comfyui/comfy/text_encoders; \
   NODE=/comfyui/custom_nodes/pp_krea2; \
   test -d "$TE"; \
   test -d "$NODE"; \
   BASE=https://raw.githubusercontent.com/comfyanonymous/ComfyUI/master/comfy/text_encoders; \
-  for f in qwen_vl.py qwen35.py qwen3vl.py qwen_image.py llama.py hunyuan_video.py krea2.py; do \
-    if [ -f "$NODE/$f" ]; then cp -f "$NODE/$f" "$TE/$f"; \
-    elif [ -f "$NODE/krea2_te.py" ] && [ "$f" = "krea2.py" ]; then cp -f "$NODE/krea2_te.py" "$TE/krea2.py"; \
-    else wget -qO "$TE/$f" "$BASE/$f"; fi; \
+  for f in qwen_vl.py qwen35.py; do \
+    wget -qO "$TE/$f" "$BASE/$f"; \
   done; \
-  # Always ensure krea2 from vendored te if present
-  if [ -f "$NODE/krea2_te.py" ]; then cp -f "$NODE/krea2_te.py" "$TE/krea2.py"; fi; \
   for f in qwen3vl.py llama.py qwen_image.py hunyuan_video.py; do \
-    if [ -f "$NODE/$f" ]; then cp -f "$NODE/$f" "$TE/$f"; fi; \
+    cp -f "$NODE/$f" "$TE/$f"; \
   done; \
+  cp -f "$NODE/krea2_te.py" "$TE/krea2.py"; \
+  test -s "$TE/qwen_vl.py"; \
+  test -s "$TE/qwen35.py"; \
+  test -s "$TE/qwen3vl.py"; \
+  test -s "$TE/krea2.py"; \
+  test -s "$TE/llama.py"; \
   ls -la "$TE"/qwen*.py "$TE"/krea2.py "$TE"/llama.py; \
-  python -c "import comfy.text_encoders.qwen_vl; print('qwen_vl_ok')"; \
-  python -c "import comfy.text_encoders.qwen3vl; print('qwen3vl_ok')"; \
-  python -c "import comfy.text_encoders.krea2; print('krea2_ok')"; \
   test -f /start.sh; \
   test -f /handler.py; \
   test -f /comfyui/custom_nodes/pp_krea2/__init__.py; \
