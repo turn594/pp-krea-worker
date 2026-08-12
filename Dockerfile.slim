@@ -8,22 +8,22 @@ USER root
 
 COPY custom_nodes/universal_seamless/ /comfyui/custom_nodes/universal_seamless/
 COPY custom_nodes/pp_krea2/ /comfyui/custom_nodes/pp_krea2/
+COPY vendor/text_encoders/ /tmp/vendor_te/
 COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
 
 # Bake TE stack into stock Comfy 5.8.6 (missing qwen3vl / krea2 / VL helpers).
-# Do not import comfy at build time (package lives under /comfyui, not site-packages).
+# All files from build context — no network at image build time.
 RUN set -eux; \
   TE=/comfyui/comfy/text_encoders; \
   NODE=/comfyui/custom_nodes/pp_krea2; \
   test -d "$TE"; \
   test -d "$NODE"; \
-  BASE=https://raw.githubusercontent.com/comfyanonymous/ComfyUI/master/comfy/text_encoders; \
-  for f in qwen_vl.py qwen35.py; do \
-    wget -qO "$TE/$f" "$BASE/$f"; \
-  done; \
-  for f in qwen3vl.py llama.py qwen_image.py hunyuan_video.py; do \
-    cp -f "$NODE/$f" "$TE/$f"; \
-  done; \
+  cp -f /tmp/vendor_te/qwen_vl.py "$TE/qwen_vl.py"; \
+  cp -f /tmp/vendor_te/qwen35.py "$TE/qwen35.py"; \
+  cp -f "$NODE/qwen3vl.py" "$TE/qwen3vl.py"; \
+  cp -f "$NODE/llama.py" "$TE/llama.py"; \
+  cp -f "$NODE/qwen_image.py" "$TE/qwen_image.py"; \
+  cp -f "$NODE/hunyuan_video.py" "$TE/hunyuan_video.py"; \
   cp -f "$NODE/krea2_te.py" "$TE/krea2.py"; \
   test -s "$TE/qwen_vl.py"; \
   test -s "$TE/qwen35.py"; \
