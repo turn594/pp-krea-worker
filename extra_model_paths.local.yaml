@@ -1,0 +1,15 @@
+# Local-only paths (weights baked into image). No network volume dependency.
+pp_local_hot:
+  base_path: /comfyui/
+  checkpoints: models/checkpoints/
+  clip: models/clip/
+  text_encoders: models/text_encoders/
+  clip_vision: models/clip_vision/
+  configs: models/configs/
+  controlnet: models/controlnet/
+  embeddings: models/embeddings/
+  loras: models/loras/
+  upscale_models: models/upscale_models/
+  vae: models/vae/
+  unet: models/unet/
+  diffusion_models: models/diffusion_models/

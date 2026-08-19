@@ -1,0 +1,44 @@
+# Product worker WITH hot-path weights baked into image layers.
+# Cold start taps GHCR/registry layers + FlashBoot — NOT network volume rehydrate.
+# Base: proven surgical + PPKrea2 loaders (12aedce lineage via b5905da).
+
+FROM ghcr.io/turn594/pp-krea-worker:db81febddd431196f0a727be6ee2d432a0d39151
+
+USER root
+
+COPY custom_nodes/pp_krea2/ /comfyui/custom_nodes/pp_krea2/
+COPY extra_model_paths.local.yaml /comfyui/extra_model_paths.yaml
+
+RUN test -f /comfyui/custom_nodes/pp_krea2/__init__.py \
+  && grep -q PPKrea2UNETLoader /comfyui/custom_nodes/pp_krea2/__init__.py \
+  && echo pp_krea2_ok
+
+# --- Bake product weights into image (HF is source; registry is the store) ---
+# turbo fp8 ~13GB + TE ~5GB + VAE ~0.25GB
+RUN set -eux; \
+  mkdir -p \
+    /comfyui/models/diffusion_models \
+    /comfyui/models/text_encoders \
+    /comfyui/models/vae \
+    /comfyui/models/unet \
+    /comfyui/models/clip; \
+  wget -q -O /comfyui/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors"; \
+  wget -q -O /comfyui/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors"; \
+  wget -q -O /comfyui/models/vae/qwen_image_vae.safetensors \
+    "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors"; \
+  # aliases some loaders probe \
+  cp -f /comfyui/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors \
+    /comfyui/models/unet/krea2_turbo_fp8_scaled.safetensors; \
+  cp -f /comfyui/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors \
+    /comfyui/models/clip/qwen3vl_4b_fp8_scaled.safetensors; \
+  ls -lh /comfyui/models/diffusion_models/ /comfyui/models/text_encoders/ /comfyui/models/vae/; \
+  # sanity sizes (fail build if HF gave HTML error page) \
+  test "$(stat -c%s /comfyui/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors)" -gt 10000000000; \
+  test "$(stat -c%s /comfyui/models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors)" -gt 4000000000; \
+  test "$(stat -c%s /comfyui/models/vae/qwen_image_vae.safetensors)" -gt 200000000; \
+  echo MODELS_BAKED_OK
+
+# Stock worker-comfyui entry — no volume required for product path
+CMD ["/start.sh"]
