@@ -10,6 +10,101 @@ from __future__ import annotations
 import os
 import shutil
 
+# Official cached-model mount + resolver:
+# https://docs.runpod.io/serverless/development/huggingface-models#locate-cached-models
+# https://docs.runpod.io/serverless/endpoints/model-caching#where-cached-models-are-stored
+HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
+CACHED_MODEL_ID = os.environ.get("MODEL_NAME", "Comfy-Org/Krea-2")
+
+
+def _normalize_model_id(model_id: str) -> tuple[str, str | None]:
+    """Accept org/name, org/name:sha, or a huggingface.co URL from the Model field."""
+    s = (model_id or "").strip()
+    if s.startswith("https://huggingface.co/"):
+        s = s[len("https://huggingface.co/") :].strip("/")
+    sha = None
+    if ":" in s:
+        s, sha = s.split(":", 1)
+        sha = sha.strip() or None
+    return s, sha
+
+
+def resolve_snapshot_path(model_id: str) -> str:
+    """Resolve the local snapshot path for a cached Hugging Face model."""
+    model_id, pinned_sha = _normalize_model_id(model_id)
+    if "/" not in model_id:
+        raise ValueError(f"model_id '{model_id}' must be in 'org/name' format")
+
+    org, name = model_id.split("/", 1)
+    model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
+    refs_main = os.path.join(model_root, "refs", "main")
+    snapshots_dir = os.path.join(model_root, "snapshots")
+
+    if pinned_sha:
+        candidate = os.path.join(snapshots_dir, pinned_sha)
+        if os.path.isdir(candidate):
+            return candidate
+
+    if os.path.isfile(refs_main):
+        with open(refs_main, "r") as f:
+            snapshot_hash = f.read().strip()
+        candidate = os.path.join(snapshots_dir, snapshot_hash)
+        if os.path.isdir(candidate):
+            return candidate
+
+    if os.path.isdir(snapshots_dir):
+        versions = [
+            d
+            for d in os.listdir(snapshots_dir)
+            if os.path.isdir(os.path.join(snapshots_dir, d))
+        ]
+        if versions:
+            versions.sort()
+            return os.path.join(snapshots_dir, versions[0])
+
+    raise RuntimeError(f"Cached model not found: {model_id}")
+
+
+def _cached_weight(*rel_parts: str) -> str | None:
+    try:
+        snap = resolve_snapshot_path(CACHED_MODEL_ID)
+    except Exception as e:
+        print("[pp_krea2] cached snapshot unavailable:", e)
+        return None
+    path = os.path.join(snap, *rel_parts)
+    return path if os.path.isfile(path) else None
+
+
+def _register_cached_model_folders() -> None:
+    """Point ComfyUI folder_paths at the official cache snapshot (is_default=first)."""
+    try:
+        snap = resolve_snapshot_path(CACHED_MODEL_ID)
+    except Exception as e:
+        print("[pp_krea2] cache folders not registered:", e)
+        return
+    try:
+        import folder_paths
+    except Exception as e:
+        print("[pp_krea2] folder_paths import failed:", e)
+        return
+    mapping = (
+        ("diffusion_models", "diffusion_models"),
+        ("unet", "diffusion_models"),
+        ("text_encoders", "text_encoders"),
+        ("clip", "text_encoders"),
+        ("vae", "vae"),
+        ("loras", "loras"),
+    )
+    for folder, sub in mapping:
+        full = os.path.join(snap, sub)
+        if not os.path.isdir(full):
+            continue
+        try:
+            folder_paths.add_model_folder_path(folder, full, is_default=True)
+        except TypeError:
+            folder_paths.add_model_folder_path(folder, full)
+        print("[pp_krea2] cache folder", folder, full)
+
 
 def _ensure_krea2_module():
     import importlib
@@ -113,9 +208,15 @@ class PPKrea2CLIPLoader:
         if device == "cpu":
             model_options["load_device"] = model_options["offload_device"] = torch.device("cpu")
 
-        # Resolve clip weights: text_encoders first, then clip (volume layout)
-        clip_path = None
+        # Official cache snapshot first, then folder_paths, then volume fallback.
+        clip_path = _cached_weight("text_encoders", clip_name) or _cached_weight(
+            "clip", clip_name
+        )
+        if clip_path:
+            print("[pp_krea2] resolved cache", clip_path)
         for folder in ("text_encoders", "clip"):
+            if clip_path:
+                break
             try:
                 if hasattr(folder_paths, "get_full_path_or_raise"):
                     try:
@@ -428,8 +529,14 @@ class PPKrea2UNETLoader:
         elif weight_dtype == "fp8_e5m2":
             model_options["dtype"] = torch.float8_e5m2
 
-        unet_path = None
+        unet_path = _cached_weight("diffusion_models", unet_name) or _cached_weight(
+            "unet", unet_name
+        )
+        if unet_path:
+            print("[pp_krea2] UNET cache", unet_path)
         for folder in ("diffusion_models", "unet"):
+            if unet_path:
+                break
             try:
                 if hasattr(folder_paths, "get_full_path_or_raise"):
                     try:
@@ -476,4 +583,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "UNETLoaderKrea2": "UNET Loader (Krea2 alias)",
 }
 
+_register_cached_model_folders()
 print("[pp_krea2] registered CLIP+UNET Krea2 loaders")
